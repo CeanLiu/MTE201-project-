@@ -1,1 +1,5 @@
-./myenv
+# Python virtual environment
+myenv/
+
+# If you used a different venv name, add it here too, e.g.:
+# venv/

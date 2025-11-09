@@ -1,79 +1,155 @@
 import cv2
 import numpy as np
+import math
 
-def process_image(image_path):
-    # Read the image
-    img = cv2.imread(image_path)
-    if img is None:
-        raise ValueError("Could not read the image")
+class ZoomCalibrator:
+    def __init__(self, img, window_name="Calibration", view_w=1200, view_h=800):
+        self.img = img
+        self.H, self.W = img.shape[:2]
+        self.win = window_name
+        self.view_w, self.view_h = view_w, view_h
 
-    # Create a copy for the original image analysis
-    original_output = img.copy()
+        self.zoom = 1.0
+        self.min_zoom = min(view_w / self.W, view_h / self.H)
+        self.zoom = max(self.zoom, self.min_zoom)
+        self.max_zoom = 20.0
+        self.offset_x = (self.W - self.view_w / self.zoom) / 2.0
+        self.offset_y = (self.H - self.view_h / self.zoom) / 2.0
 
-    # Convert to grayscale
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        self.dragging = False
+        self.drag_start = (0, 0)
+        self.offset_start = (self.offset_x, self.offset_y)
+        self.mouse_pos = (self.view_w // 2, self.view_h // 2)
 
-    # Apply Gaussian blur
-    blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+        self.points = []
+        self.done = False
+        self.canceled = False
 
-    # Apply Canny edge detection
-    edges = cv2.Canny(blurred, threshold1=50, threshold2=150)
-    
-    # Dilate edges to make them more visible
-    kernel = np.ones((3,3), np.uint8)
-    dilated_edges = cv2.dilate(edges, kernel, iterations=1)
-    
-    # Find contours from the edge-detected image
-    contours, _ = cv2.findContours(dilated_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.namedWindow(self.win, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(self.win, self.view_w, self.view_h)
+        cv2.setMouseCallback(self.win, self._on_mouse)
 
-    # Convert edges to BGR for visualization and drawing
-    edge_output = cv2.cvtColor(dilated_edges, cv2.COLOR_GRAY2BGR)
+    def disp_to_img(self, mx, my):
+        ix = self.offset_x + mx / self.zoom
+        iy = self.offset_y + my / self.zoom
+        return ix, iy
 
-    # Process each contour and draw on both images
-    for contour in contours:
-        # Calculate contour area
-        area = cv2.contourArea(contour)
-        
-        # Filter out very small contours
-        if area > 100:  # Adjust this threshold based on your needs
-            # Draw contours
-            cv2.drawContours(edge_output, [contour], -1, (255, 0, 0), 2)  # Blue on edge image
-            cv2.drawContours(original_output, [contour], -1, (255, 0, 0), 2)  # Blue on original
+    def img_to_disp(self, ix, iy):
+        mx = int((ix - self.offset_x) * self.zoom)
+        my = int((iy - self.offset_y) * self.zoom)
+        return mx, my
 
-            # Calculate centroid
-            M = cv2.moments(contour)
-            if M["m00"] != 0:
-                cX = int(M["m10"] / M["m00"])
-                cY = int(M["m01"] / M["m00"])
-                
-                # Get bounding rectangle dimensions
-                x, y, w, h = cv2.boundingRect(contour)
-                
-                # Draw bounding rectangles
-                cv2.rectangle(edge_output, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Green on edge image
-                cv2.rectangle(original_output, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Green on original
-                
-                # Add size labels
-                size_text = f"{w}x{h}px"
-                # White text with black outline on original image for better visibility
-                cv2.putText(original_output, size_text, (cX - 40, cY), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3)  # Black outline
-                cv2.putText(original_output, size_text, (cX - 40, cY), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)  # White text
-                # Red text on edge image
-                cv2.putText(edge_output, size_text, (cX - 40, cY), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+    def _clamp_offset(self):
+        vw = self.view_w / self.zoom
+        vh = self.view_h / self.zoom
+        self.offset_x = max(-1000, min(self.offset_x, self.W + 1000))
+        self.offset_y = max(-1000, min(self.offset_y, self.H + 1000))
 
-    # Display images side by side
-    cv2.imshow('Original Analysis', original_output)
-    cv2.imshow('Edge Analysis', edge_output)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    def _on_mouse(self, event, x, y, flags, param):
+        self.mouse_pos = (x, y)
 
-if __name__ == "__main__":
-    # Replace with your image path
-    image_path = "sample2.png"  # You'll need to update this
-    try:
-        process_image(image_path)
-    except Exception as e:
-        print(f"Error: {e}")
+        if event == cv2.EVENT_LBUTTONDOWN:
+            ix, iy = self.disp_to_img(x, y)
+            ix = max(0, min(self.W - 1, ix))
+            iy = max(0, min(self.H - 1, iy))
+            self.points.append((ix, iy))
+
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            self.dragging = True
+            self.drag_start = (x, y)
+            self.offset_start = (self.offset_x, self.offset_y)
+
+        elif event == cv2.EVENT_MOUSEMOVE and self.dragging:
+            dx = x - self.drag_start[0]
+            dy = y - self.drag_start[1]
+            self.offset_x = self.offset_start[0] - dx / self.zoom
+            self.offset_y = self.offset_start[1] - dy / self.zoom
+            self._clamp_offset()
+
+        elif event == cv2.EVENT_RBUTTONUP:
+            self.dragging = False
+
+        elif event == cv2.EVENT_MOUSEWHEEL:
+            delta = 1 if flags > 0 else -1
+            factor = 1.25 if delta > 0 else 0.8
+            old_zoom = self.zoom
+            new_zoom = max(self.min_zoom, min(self.zoom * factor, self.max_zoom))
+            if abs(new_zoom - old_zoom) < 1e-6:
+                return
+
+            ix, iy = self.disp_to_img(x, y)
+            self.zoom = new_zoom
+            self.offset_x = ix - x / self.zoom
+            self.offset_y = iy - y / self.zoom
+            self._clamp_offset()
+
+    def _render_view(self):
+        roi_w = self.view_w / self.zoom
+        roi_h = self.view_h / self.zoom
+        x0 = int(np.floor(self.offset_x))
+        y0 = int(np.floor(self.offset_y))
+        x1 = int(np.ceil(self.offset_x + roi_w))
+        y1 = int(np.ceil(self.offset_y + roi_h))
+
+        canvas = np.zeros((self.view_h, self.view_w, 3), dtype=np.uint8)
+
+        sx0 = max(0, x0)
+        sy0 = max(0, y0)
+        sx1 = min(self.W, x1)
+        sy1 = min(self.H, y1)
+
+        if sx1 > sx0 and sy1 > sy0:
+            sub = self.img[sy0:sy1, sx0:sx1]
+            dx0 = int((sx0 - self.offset_x) * self.zoom)
+            dy0 = int((sy0 - self.offset_y) * self.zoom)
+            dW = int(sub.shape[1] * self.zoom)
+            dH = int(sub.shape[0] * self.zoom)
+            sub_resized = cv2.resize(sub, (dW, dH), interpolation=cv2.INTER_LINEAR)
+            canvas[dy0:dy0 + dH, dx0:dx0 + dW] = sub_resized[:self.view_h - dy0, :self.view_w - dx0]
+
+        for idx, (ix, iy) in enumerate(self.points):
+            mx, my = self.img_to_disp(ix, iy)
+            if 0 <= mx < self.view_w and 0 <= my < self.view_h:
+                cv2.circle(canvas, (mx, my), 5, (0, 0, 255), -1)
+                cv2.putText(canvas, f"P{idx + 1}", (mx + 6, my - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                cv2.putText(canvas, f"P{idx + 1}", (mx + 6, my - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+
+        if len(self.points) >= 2:
+            (ix1, iy1), (ix2, iy2) = self.points[:2]
+            mx1, my1 = self.img_to_disp(ix1, iy1)
+            mx2, my2 = self.img_to_disp(ix2, iy2)
+            cv2.line(canvas, (mx1, my1), (mx2, my2), (0, 255, 0), 2)
+
+        cv2.putText(canvas, "Left-click: mark  |  Right-drag: pan  |  Wheel: zoom  |  u: undo  |  r: reset  |  Enter: confirm",
+                    (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+        return canvas
+
+    def run(self):
+        print("\nCalibration: pick TWO points 10mm apart.")
+        while True:
+            view = self._render_view()
+            cv2.imshow(self.win, view)
+            key = cv2.waitKey(10) & 0xFF
+
+            if key in (13, 32):  # Enter or Space
+                if len(self.points) >= 2:
+                    self.done = True
+                    break
+            elif key == 27:  # ESC
+                self.canceled = True
+                break
+            elif key == ord('u') and self.points:
+                self.points.pop()
+            elif key == ord('r'):
+                self.zoom = max(1.0, self.min_zoom)
+                self.offset_x = (self.W - self.view_w / self.zoom) / 2.0
+                self.offset_y = (self.H - self.view_h / self.zoom) / 2.0
+
+        cv2.destroyWindow(self.win)
+        return self.done, self.points[:2]
+
+
+# integrate with your same process_image() code as before
+
