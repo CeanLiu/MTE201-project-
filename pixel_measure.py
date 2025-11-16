@@ -224,6 +224,7 @@ class PixelMeasurer:
             pixel_distance = math.hypot(x2 - x1, y2 - y1)
             dx = abs(x2 - x1)
             dy = abs(y2 - y1)
+            true_L = pixel_distance * 0.0508 - 0.1586
             print(f"\n{'='*50}")
             print(f"Final Measurement:")
             print(f"  Point 1: ({x1}, {y1})")
@@ -231,6 +232,7 @@ class PixelMeasurer:
             print(f"  Pixel Distance: {pixel_distance:.2f} pixels")
             print(f"  Delta X: {dx} pixels")
             print(f"  Delta Y: {dy} pixels")
+            print (f"  True Length: {true_L:.2f} mm (approx.) +- 0.18mm")
             print(f"{'='*50}")
 
 
